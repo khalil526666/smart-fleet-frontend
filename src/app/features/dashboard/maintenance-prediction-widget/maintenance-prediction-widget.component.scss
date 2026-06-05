@@ -1,0 +1,301 @@
+/* ── Widget card ─────────────────────────────────────────────── */
+.pred-card {
+  background: #ffffff;
+  border: 1px solid #dfe6e9;
+  border-radius: 18px;
+  box-shadow: 0 2px 16px rgba(44, 62, 80, 0.07);
+  padding: 0.95rem 0.95rem 0.85rem;
+  margin-top: 0.9rem;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+.pred-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.pred-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.pred-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #b3ede3;
+  background: #e6faf6;
+  color: #00a886;
+  flex-shrink: 0;
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.pred-title {
+  font-weight: 900;
+  color: #2d3436;
+  font-size: 0.95rem;
+}
+
+.pred-sub {
+  font-size: 0.8rem;
+  color: #636e72;
+  margin-top: 0.1rem;
+}
+
+/* ── Urgent badge (keep visible) ────────────────────────────── */
+.pred-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid #fadbd8;
+  color: #e74c3c;
+  background: #fdedec;
+  white-space: nowrap;
+}
+
+/* ── List ────────────────────────────────────────────────────── */
+.pred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* ── Row ─────────────────────────────────────────────────────── */
+.pred-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid #dfe6e9;
+  background: #f5faf8;
+  transition: border-color 0.14s, background 0.14s, opacity 0.2s;
+
+  &:hover {
+    border-color: #b3ede3;
+    background: #e6faf6;
+  }
+
+  &.is-refreshing {
+    opacity: 0.55;
+  }
+}
+
+/* ── Vehicle photo ───────────────────────────────────────────── */
+.pred-photo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 2px solid #b3ede3;
+  background: #e6faf6;
+  display: grid;
+  place-items: center;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.pred-photo-ic {
+  display: grid;
+  place-items: center;
+  color: #00c9a7;
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+/* ── Vehicle info ────────────────────────────────────────────── */
+.pred-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.pred-plate {
+  font-weight: 800;
+  color: #2d3436;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pred-model {
+  font-size: 0.78rem;
+  color: #636e72;
+  margin-top: 0.1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Days block ──────────────────────────────────────────────── */
+.pred-days {
+  text-align: center;
+  flex-shrink: 0;
+  min-width: 52px;
+}
+
+.pred-days-val {
+  font-size: 1.5rem;
+  font-weight: 950;
+  letter-spacing: -0.03em;
+  color: #00a886;
+  line-height: 1;
+}
+
+.pred-days-lbl {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #b2bec3;
+  margin-top: 0.15rem;
+}
+
+/* ── Date ────────────────────────────────────────────────────── */
+.pred-date {
+  font-size: 0.8rem;
+  color: #636e72;
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 96px;
+  text-align: center;
+}
+
+/* ── Urgency badges ──────────────────────────────────────────── */
+.pred-urgency {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+
+  /* Default (unknown) */
+  border: 1px solid #dfe6e9;
+  color: #636e72;
+  background: #f1f3f5;
+
+  &.faible {
+    border-color: #a9dfbf;
+    color: #27ae60;
+    background: #eafaf1;
+  }
+
+  &.moyen {
+    border-color: #f9e79f;
+    color: #d68910;
+    background: #fef9e7;
+  }
+
+  &.eleve {
+    border-color: #fadbd8;
+    color: #e74c3c;
+    background: #fdedec;
+  }
+}
+
+/* ── Refresh button ──────────────────────────────────────────── */
+.pred-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 32px;
+  padding: 0 0.65rem;
+  border-radius: 10px;
+  border: 1px solid #b3ede3;
+  background: #e6faf6;
+  color: #00a886;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.14s, background 0.14s, color 0.14s, border-color 0.14s;
+
+  &:hover:not(:disabled) {
+    transform: translateY(-1px);
+    background: #00c9a7;
+    color: #ffffff;
+    border-color: #00c9a7;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  svg.spin {
+    animation: spin 0.75s linear infinite;
+  }
+}
+
+/* ── Empty / error states ────────────────────────────────────── */
+.pred-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 1.2rem 0.9rem;
+  border-radius: 14px;
+  border: 1px dashed #b3ede3;
+  color: #b2bec3;
+  font-weight: 700;
+  font-size: 0.875rem;
+}
+
+.pred-err {
+  border-color: #fadbd8;
+  color: #e74c3c;
+  background: #fdedec;
+}
+
+/* ── Skeleton loader ─────────────────────────────────────────── */
+.pred-sk {
+  height: 70px;
+  border-radius: 14px;
+  border: 1px solid #dfe6e9;
+  background: linear-gradient(90deg, #f5faf8, #e8f5f1, #f5faf8);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s infinite;
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: 0% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 760px) {
+  .pred-date { display: none; }
+}
+
+@media (max-width: 520px) {
+  .pred-refresh { display: none; }
+  .pred-days { min-width: 40px; }
+}

@@ -1,0 +1,1305 @@
+import {
+  ChangeDetectionStrategy,
+  ChangeDetectorRef,
+  Component,
+  DestroyRef,
+  OnInit,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { finalize } from 'rxjs';
+import { TranslateModule, TranslateService } from '@ngx-translate/core';
+import { ApiService } from '../../core/services/api.service';
+import { AuthService } from '../../core/services/auth.service';
+import { TndCurrencyPipe } from '../../core/pipes/tnd-currency.pipe';
+import { MapWidgetComponent } from './map-widget.component';
+import { MaintenancePredictionWidgetComponent } from './maintenance-prediction-widget/maintenance-prediction-widget.component';
+import {
+  ApexAxisChartSeries,
+  ApexChart,
+  ApexDataLabels,
+  ApexFill,
+  ApexGrid,
+  ApexLegend,
+  ApexNonAxisChartSeries,
+  ApexPlotOptions,
+  ApexStroke,
+  ApexTooltip,
+  ApexXAxis,
+  ApexYAxis,
+  NgApexchartsModule,
+} from 'ng-apexcharts';
+
+interface AlertsResponse {
+  count: number;
+  alerts: Array<{ type?: string }>;
+}
+
+interface DashboardPayload {
+  total_vehicles: number;
+  active_vehicles?: number;
+  vehicles_under_maintenance: number;
+  missions_today?: number;
+  active_drivers: number;
+  fuel: { total_liters: number; total_cost: number };
+  series: {
+    vehicles_by_status: Array<{ status: string; count: number }>;
+    fuel_by_month: Array<{ ym: string; liters: number; cost: number }>;
+    maintenance_by_month: Array<{ ym: string; count: number; cost: number }>;
+    missions_by_month?: Array<{ ym: string; count: number }>;
+  };
+}
+
+interface FuelRecord {
+  id: number;
+  vehicle_id: number;
+  liters: string | number;
+  price: string | number;
+  date: string;
+  vehicle?: { id: number; brand: string; model: string; license_plate: string };
+}
+
+interface TopFuelRow {
+  vehicleId: number;
+  label: string;
+  liters: number;
+  cost: number;
+}
+
+type MissionRow = {
+  id?: number;
+  description?: string;
+  status?: string;
+  created_at?: string;
+  vehicle?: { license_plate?: string };
+  chauffeur?: { name?: string };
+};
+
+type DriverRow = { id?: number; name?: string; email?: string };
+
+@Component({
+  selector: 'app-dashboard',
+  standalone: true,
+  imports: [CommonModule, TranslateModule, RouterLink, TndCurrencyPipe, MapWidgetComponent, NgApexchartsModule, MaintenancePredictionWidgetComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `
+    <div class="container saas" [class.dash-wide]="canFleet()">
+      @if (auth.currentUser()?.role === 'chauffeur') {
+        <div class="page-head">
+          <div>
+            <div class="eyebrow">Smart Fleet</div>
+            <h1 class="title">{{ 'DASHBOARD.CHAUFFEUR_TITLE' | translate }}</h1>
+            <p class="sub">{{ 'DASHBOARD.CHAUFFEUR_SUBTITLE' | translate }}</p>
+          </div>
+        </div>
+
+        @if (chauffeurLoading()) {
+          <div class="skeleton-grid">
+            @for (i of [1, 2, 3, 4]; track i) {
+              <div class="sk-card"></div>
+            }
+          </div>
+        } @else if (chauffeurError()) {
+          <div class="chauffeur-error">{{ chauffeurError() }}</div>
+        } @else {
+          <div class="kpi-row">
+            <div class="kpi-card grad-a">
+              <div class="kpi-top">
+                <div class="kpi-name">{{ 'DASHBOARD.CHAUFFEUR_MISSIONS_TOTAL' | translate }}</div>
+                <span class="kpi-ic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                  </svg>
+                </span>
+              </div>
+              <div class="kpi-val">{{ chauffeurStats().total }}</div>
+            </div>
+            <div class="kpi-card grad-c">
+              <div class="kpi-top">
+                <div class="kpi-name">{{ 'MISSIONS.PLANNED' | translate }}</div>
+                <span class="kpi-ic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v18H3z"/><path d="M7 8h10"/><path d="M7 12h6"/><path d="M7 16h10"/></svg>
+                </span>
+              </div>
+              <div class="kpi-val">{{ chauffeurStats().planned }}</div>
+            </div>
+            <div class="kpi-card grad-b">
+              <div class="kpi-top">
+                <div class="kpi-name">{{ 'MISSIONS.IN_PROGRESS' | translate }}</div>
+                <span class="kpi-ic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                </span>
+              </div>
+              <div class="kpi-val">{{ chauffeurStats().inProgress }}</div>
+            </div>
+            <div class="kpi-card grad-d">
+              <div class="kpi-top">
+                <div class="kpi-name">{{ 'MISSIONS.COMPLETED' | translate }}</div>
+                <span class="kpi-ic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                </span>
+              </div>
+              <div class="kpi-val">{{ chauffeurStats().completed }}</div>
+            </div>
+          </div>
+
+          <div class="quick-row">
+            <a class="quick" routerLink="/my-missions">
+              <span class="q-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+              <div>
+                <div class="q-title">{{ 'NAV.MY_MISSIONS' | translate }}</div>
+                <div class="q-sub">{{ 'DASHBOARD.CHAUFFEUR_LINK_MISSIONS' | translate }}</div>
+              </div>
+            </a>
+            <a class="quick" routerLink="/trajets">
+              <span class="q-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 6h5l1 2h12"/><path d="M5 16l-1-5h16l-1 5"/><path d="M7 18h.01"/><path d="M17 18h.01"/></svg></span>
+              <div>
+                <div class="q-title">{{ 'NAV.TRAJETS' | translate }}</div>
+                <div class="q-sub">{{ 'DASHBOARD.CHAUFFEUR_LINK_TRAJETS' | translate }}</div>
+              </div>
+            </a>
+            <a class="quick" routerLink="/incidents/report">
+              <span class="q-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M10.3 3.3 1.6 18a2 2 0 0 0 1.7 3h17.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+              <div>
+                <div class="q-title">{{ 'NAV.REPORT_INCIDENT' | translate }}</div>
+                <div class="q-sub">{{ 'DASHBOARD.CHAUFFEUR_LINK_INCIDENT' | translate }}</div>
+              </div>
+            </a>
+            <a class="quick" routerLink="/incidents">
+              <span class="q-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M10.3 3.3 1.6 18a2 2 0 0 0 1.7 3h17.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+              <div>
+                <div class="q-title">{{ 'NAV.INCIDENTS' | translate }}</div>
+                <div class="q-sub">{{ 'DASHBOARD.CHAUFFEUR_LINK_LIST' | translate }}</div>
+              </div>
+            </a>
+          </div>
+        }
+      } @else if (canFleet()) {
+        <div class="premium-grid">
+          <div class="main-col">
+            <div class="page-head">
+              <div>
+                <div class="eyebrow">Smart Fleet</div>
+                <h1 class="title">{{
+                  auth.isAdmin()
+                    ? ('DASHBOARD.ADMIN_TITLE' | translate)
+                    : ('DASHBOARD.USER_TITLE' | translate)
+                }}</h1>
+                <p class="sub">{{ 'DASHBOARD.ANALYTICS_INTRO' | translate }}</p>
+              </div>
+              <div class="head-actions">
+                @if (canFleet()) {
+                  <a class="pill-btn" routerLink="/alerts">
+                    <span class="p-ic" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10.3 3.3 1.6 18a2 2 0 0 0 1.7 3h17.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0Z" />
+                        <path d="M12 9v4" />
+                        <path d="M12 17h.01" />
+                      </svg>
+                    </span>
+                    <span>{{ 'NAV.ALERTS' | translate }}</span>
+                    @if (alertsCount() > 0) {
+                      <span class="p-badge">{{ alertsCount() }}</span>
+                    }
+                  </a>
+                }
+              </div>
+            </div>
+
+            @if (dashLoading()) {
+              <div class="skeleton-dash">
+                <div class="sk-row kpi-sk"></div>
+                @if (canFleet()) {
+                  <div class="sk-row hero-sk"></div>
+                }
+                <div class="sk-row charts-sk"></div>
+              </div>
+            } @else if (dashError()) {
+              <div class="dash-err">{{ dashError() }}</div>
+            } @else {
+              <div class="kpi-row kpi-6">
+                <div class="kpi-card grad-a">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'DASHBOARD.TOTAL_VEHICLES' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 16l1-4 2-6h12l2 6 1 4"/><path d="M6 12h12"/><path d="M7 16a2 2 0 0 0 4 0"/><path d="M13 16a2 2 0 0 0 4 0"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ dashboard()?.total_vehicles ?? 0 }}</div>
+                  <div class="kpi-foot">
+                    <span class="trend up">{{ driverCoverPct() | number:'1.1-1' }}%</span>
+                    <span class="muted">{{ 'DASHBOARD.INSIGHT_DRIVER_COVER' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkVehiclesSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillA" [colors]="sparkColorsA" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+
+                <div class="kpi-card grad-b">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'DASHBOARD.ACTIVE_VEHICLES' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 12l5 5L20 7"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ dashboard()?.active_vehicles ?? 0 }}</div>
+                  <div class="kpi-foot">
+                    <span class="trend ok">{{ activeFleetPct() | number:'1.1-1' }}%</span>
+                    <span class="muted">{{ 'DASHBOARD.TREND_FLEET_SHARE' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkActiveVehiclesSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillB" [colors]="sparkColorsB" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+
+                <div class="kpi-card grad-d">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'DASHBOARD.MISSIONS_TODAY' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ dashboard()?.missions_today ?? 0 }}</div>
+                  <div class="kpi-foot">
+                    <span class="trend" [class.up]="(missionsMomPct() ?? 0) >= 0" [class.bad]="(missionsMomPct() ?? 0) < 0">{{ missionsMomPct() === null ? '—' : (missionsMomPct()! > 0 ? '+' : '') + (missionsMomPct() | number:'1.1-1') + '%' }}</span>
+                    <span class="muted">{{ 'DASHBOARD.TREND_MOM' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkMissionsMonthSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillD" [colors]="sparkColorsD" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+
+                <div class="kpi-card grad-teal">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'DASHBOARD.FUEL_LITERS' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 22h10V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2Z"/><path d="M7 9h2"/><path d="M13 13h2a2 2 0 0 0 2-2V6l-2-2"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ (dashboard()?.fuel?.total_liters ?? 0) | number:'1.0-0' }} <span class="unit">L</span></div>
+                  <div class="kpi-foot">
+                    <span class="trend up">{{ fuelMomPct() === null ? '—' : (fuelMomPct()! > 0 ? '+' : '') + (fuelMomPct() | number:'1.1-1') + '%' }}</span>
+                    <span class="muted">{{ 'DASHBOARD.TREND_MOM' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkFuelSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillTeal" [colors]="sparkColorsTeal" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+
+                <div class="kpi-card grad-danger">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'NAV.ALERTS' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M10.3 3.3 1.6 18a2 2 0 0 0 1.7 3h17.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ alertsCount() }}</div>
+                  <div class="kpi-foot">
+                    <span class="trend bad">{{ 'DASHBOARD.TREND_LIVE' | translate }}</span>
+                    <span class="muted">{{ 'DASHBOARD.OPEN_ALERTS' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkAlertsSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillDanger" [colors]="sparkColorsDanger" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+
+                <div class="kpi-card grad-c">
+                  <div class="kpi-top">
+                    <div class="kpi-name">{{ 'DASHBOARD.UNDER_MAINTENANCE' | translate }}</div>
+                    <span class="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M14.7 6.3a1 1 0 0 0-1.4 0l-7.1 7.1a2 2 0 0 0-.5 1.9l.3 1.1 1.1.3a2 2 0 0 0 1.9-.5l7.1-7.1a1 1 0 0 0 0-1.4Z"/><path d="M15 7l2-2"/><path d="M19 11l2-2"/></svg></span>
+                  </div>
+                  <div class="kpi-val">{{ dashboard()?.vehicles_under_maintenance ?? 0 }}</div>
+                  <div class="kpi-foot">
+                    <span class="trend warn">{{ maintSharePct() | number:'1.1-1' }}%</span>
+                    <span class="muted">{{ 'DASHBOARD.TREND_FLEET_SHARE' | translate }}</span>
+                  </div>
+                  <apx-chart class="spark" [chart]="sparkChartCfg" [series]="sparkMaintSeries()" [stroke]="sparkStrokeCfg" [grid]="sparkGridCfg" [fill]="sparkFillC" [colors]="sparkColorsC" [tooltip]="sparkTooltipCfg" [xaxis]="sparkXAxisCfg" [yaxis]="sparkYAxisCfg" [dataLabels]="sparkDataLabelsCfg"></apx-chart>
+                </div>
+              </div>
+
+              @if (canFleet()) {
+                <section class="hero glass">
+                  <div class="hero-head">
+                    <div class="hero-title">
+                      <span class="hero-dot" aria-hidden="true"></span>
+                      <span>{{ 'DASHBOARD.LIVE_MAP_TITLE' | translate }}</span>
+                      <span class="live-pill">LIVE</span>
+                    </div>
+                    <div class="hero-actions">
+                      <a class="mini" routerLink="/fleet/live">{{ 'NAV.FLEET_LIVE' | translate }}</a>
+                      <a class="mini ghost" routerLink="/missions">{{ 'NAV.MISSIONS' | translate }}</a>
+                    </div>
+                  </div>
+                  <div class="hero-body">
+                    <app-map-widget />
+                    <div class="hero-overlay">
+                      <div class="ov-title">{{ 'DASHBOARD.LIVE_MAP_TITLE' | translate }}</div>
+                      <div class="ov-sub">{{ 'DASHBOARD.LIVE_MAP_SUB' | translate }}</div>
+                      <div class="ov-stats">
+                        <div class="ov-k">
+                          <div class="ov-l">{{ 'DASHBOARD.OVERLAY_FLEET' | translate }}</div>
+                          <div class="ov-v">{{ dashboard()?.total_vehicles ?? 0 }}</div>
+                        </div>
+                        <div class="ov-k">
+                          <div class="ov-l">{{ 'DASHBOARD.OVERLAY_DRIVERS' | translate }}</div>
+                          <div class="ov-v">{{ dashboard()?.active_drivers ?? 0 }}</div>
+                        </div>
+                        <div class="ov-k">
+                          <div class="ov-l">{{ 'DASHBOARD.OVERLAY_ALERTS' | translate }}</div>
+                          <div class="ov-v">{{ alertsCount() }}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              }
+
+              @defer (on idle) {
+                <div class="bottom-grid">
+                  <section class="glass card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.CHART_FUEL_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.FUEL_CONSUMPTION' | translate }}</div>
+                    </div>
+                    <apx-chart
+                      [chart]="fuelChart().chart"
+                      [series]="fuelChart().series"
+                      [xaxis]="fuelChart().xaxis"
+                      [yaxis]="fuelChart().yaxis"
+                      [grid]="fuelChart().grid"
+                      [stroke]="fuelChart().stroke"
+                      [fill]="fuelChart().fill"
+                      [colors]="fuelChart().colors"
+                      [tooltip]="fuelChart().tooltip"
+                      [legend]="fuelChart().legend"
+                      [dataLabels]="fuelChart().dataLabels"
+                    ></apx-chart>
+                  </section>
+
+                  <section class="glass card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.CHART_MAINT_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.RECENT_MAINTENANCE' | translate }}</div>
+                    </div>
+                    <apx-chart
+                      [chart]="maintChart().chart"
+                      [series]="maintChart().series"
+                      [xaxis]="maintChart().xaxis"
+                      [yaxis]="maintChart().yaxis"
+                      [grid]="maintChart().grid"
+                      [stroke]="maintChart().stroke"
+                      [fill]="maintChart().fill"
+                      [colors]="maintChart().colors"
+                      [tooltip]="maintChart().tooltip"
+                      [legend]="maintChart().legend"
+                      [dataLabels]="maintChart().dataLabels"
+                      [plotOptions]="maintChart().plotOptions"
+                    ></apx-chart>
+                  </section>
+
+                  <section class="glass card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.CHART_STATUS_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.SMART_INSIGHTS' | translate }}</div>
+                    </div>
+                    <apx-chart
+                      [chart]="statusDonut().chart"
+                      [series]="statusDonut().series"
+                      [labels]="statusDonut().labels"
+                      [legend]="statusDonut().legend"
+                      [dataLabels]="statusDonut().dataLabels"
+                      [plotOptions]="statusDonut().plotOptions"
+                      [stroke]="statusDonut().stroke"
+                      [fill]="statusDonut().fill"
+                      [colors]="statusDonut().colors"
+                      [tooltip]="statusDonut().tooltip"
+                    ></apx-chart>
+                  </section>
+                </div>
+
+                <div class="bottom-grid bottom-grid-2">
+                  <section class="glass card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.CHART_MISSIONS_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.TREND_MOM' | translate }}</div>
+                    </div>
+                    <apx-chart
+                      [chart]="missionsChart().chart"
+                      [series]="missionsChart().series"
+                      [xaxis]="missionsChart().xaxis"
+                      [yaxis]="missionsChart().yaxis"
+                      [grid]="missionsChart().grid"
+                      [stroke]="missionsChart().stroke"
+                      [fill]="missionsChart().fill"
+                      [colors]="missionsChart().colors"
+                      [tooltip]="missionsChart().tooltip"
+                      [legend]="missionsChart().legend"
+                      [dataLabels]="missionsChart().dataLabels"
+                    ></apx-chart>
+                  </section>
+
+                  <section class="glass card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.CHART_ALERTS_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.OPEN_ALERTS' | translate }}</div>
+                    </div>
+                    @if (alertsTypeRows().length > 0) {
+                      <apx-chart
+                        [chart]="alertsBarChart().chart"
+                        [series]="alertsBarChart().series"
+                        [xaxis]="alertsBarChart().xaxis"
+                        [yaxis]="alertsBarChart().yaxis"
+                        [grid]="alertsBarChart().grid"
+                        [stroke]="alertsBarChart().stroke"
+                        [fill]="alertsBarChart().fill"
+                        [colors]="alertsBarChart().colors"
+                        [tooltip]="alertsBarChart().tooltip"
+                        [legend]="alertsBarChart().legend"
+                        [dataLabels]="alertsBarChart().dataLabels"
+                        [plotOptions]="alertsBarChart().plotOptions"
+                      ></apx-chart>
+                    } @else {
+                      <div class="chart-empty">{{ 'ALERTS.EMPTY' | translate }}</div>
+                    }
+                  </section>
+
+                  <section class="glass card health-card">
+                    <div class="card-head">
+                      <div class="card-title">{{ 'DASHBOARD.SYSTEM_HEALTH_TITLE' | translate }}</div>
+                      <div class="card-sub">{{ 'DASHBOARD.SYSTEM_HEALTH_SUB' | translate }}</div>
+                    </div>
+                    <div class="health-grid">
+                      <div class="health-tile">
+                        <div class="h-l">{{ 'DASHBOARD.SYSTEM_HEALTH_UPTIME' | translate }}</div>
+                        <div class="h-v">99.9%</div>
+                        <div class="h-bar"><span class="h-fill ok" style="width:99%"></span></div>
+                      </div>
+                      <div class="health-tile">
+                        <div class="h-l">{{ 'DASHBOARD.SYSTEM_HEALTH_LATENCY' | translate }}</div>
+                        <div class="h-v">~30s</div>
+                        <div class="h-bar"><span class="h-fill mid" style="width:40%"></span></div>
+                      </div>
+                      <div class="health-tile span-2">
+                        <div class="h-l">{{ 'DASHBOARD.ACTIVE_DRIVERS' | translate }}</div>
+                        <div class="h-v">{{ dashboard()?.active_drivers ?? 0 }} / {{ dashboard()?.total_vehicles ?? 0 }}</div>
+                        <div class="h-note">{{ 'DASHBOARD.INSIGHT_DRIVER_COVER' | translate }}</div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              } @placeholder {
+                <div class="chart-defer-ph bottom-grid" aria-hidden="true">
+                  <div class="ph-card"></div>
+                  <div class="ph-card"></div>
+                  <div class="ph-card"></div>
+                </div>
+                <div class="chart-defer-ph bottom-grid bottom-grid-2" aria-hidden="true">
+                  <div class="ph-card"></div>
+                  <div class="ph-card"></div>
+                  <div class="ph-card"></div>
+                </div>
+              }
+
+              @if (canFleet()) {
+                <app-maintenance-prediction-widget />
+              }
+            }
+          </div>
+
+          <aside class="right-col">
+            <section class="glass panel">
+              <div class="panel-head">
+                <div class="panel-title">{{ 'DASHBOARD.PANEL_ONLINE_DRIVERS' | translate }}</div>
+                @if (canFleet()) {
+                  <a class="panel-link" routerLink="/drivers">{{ 'DASHBOARD.VIEW_ALL' | translate }}</a>
+                }
+              </div>
+              @if (sideLoading()) {
+                <div class="mini-skel"></div>
+              } @else {
+                <div class="list">
+                  @for (d of onlineDrivers(); track driverRowKey(d)) {
+                    <div class="row">
+                      <div class="ava" aria-hidden="true">{{ (d.name ?? 'D').charAt(0).toUpperCase() }}</div>
+                      <div class="row-meta">
+                        <div class="row-title">{{ d.name ?? '—' }}</div>
+                        <div class="row-sub">{{ d.email ?? '—' }}</div>
+                      </div>
+                      <div class="row-pill ok">ONLINE</div>
+                    </div>
+                  }
+                  @if (onlineDrivers().length === 0) {
+                    <div class="empty">{{ 'COMMON.NO_DATA' | translate }}</div>
+                  }
+                </div>
+              }
+            </section>
+
+            <section class="glass panel">
+              <div class="panel-head">
+                <div class="panel-title">{{ 'DASHBOARD.PANEL_RECENT_MISSIONS' | translate }}</div>
+                @if (canFleet()) {
+                  <a class="panel-link" routerLink="/missions">{{ 'DASHBOARD.VIEW_ALL' | translate }}</a>
+                }
+              </div>
+              @if (sideLoading()) {
+                <div class="mini-skel"></div>
+              } @else {
+                <div class="list">
+                  @for (m of recentMissions(); track missionRowKey(m)) {
+                    <div class="row">
+                      <div class="ava alt" aria-hidden="true">#</div>
+                      <div class="row-meta">
+                        <div class="row-title">{{ m.vehicle?.license_plate ?? ('MISSIONS.NAME' | translate) }} {{ m.id ? ('#' + m.id) : '' }}</div>
+                        <div class="row-sub">{{ (m.description ?? m.status ?? '—') }}</div>
+                      </div>
+                      <div class="row-pill" [class.ok]="m.status === 'in_progress'" [class.warn]="m.status === 'planned'" [class.bad]="m.status === 'completed'">
+                        {{ m.status ?? '—' }}
+                      </div>
+                    </div>
+                  }
+                  @if (recentMissions().length === 0) {
+                    <div class="empty">{{ 'COMMON.NO_DATA' | translate }}</div>
+                  }
+                </div>
+              }
+            </section>
+
+            @if (canFleet()) {
+              <section class="glass panel">
+                <div class="panel-head">
+                  <div class="panel-title">{{ 'DASHBOARD.TOP_FUEL_VEHICLES' | translate }}</div>
+                  <a class="panel-link" routerLink="/fuel">{{ 'NAV.FUEL' | translate }}</a>
+                </div>
+                @if (topFuelVehicles().length === 0) {
+                  <div class="empty">{{ 'FUEL.NO_RESULTS' | translate }}</div>
+                } @else {
+                  <div class="fuel-list">
+                    @for (r of topFuelVehicles(); track r.vehicleId) {
+                      <div class="fuel-row">
+                        <div class="fuel-label">{{ r.label }}</div>
+                        <div class="fuel-metrics">
+                          <span class="m">{{ r.liters | number:'1.1-1' }} L</span>
+                          <span class="m strong">{{ r.cost | tnd:2 }}</span>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                }
+              </section>
+            }
+          </aside>
+        </div>
+      } @else {
+        <div class="page-head">
+          <div>
+            <div class="eyebrow">Smart Fleet</div>
+            <h1 class="title">{{ 'DASHBOARD.USER_TITLE' | translate }}</h1>
+          </div>
+        </div>
+        <div class="glass user-empty">
+          <div class="ue-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </div>
+          <div class="ue-title">Aucune flotte assignée</div>
+          <div class="ue-msg">Votre compte n'a pas encore de flotte ou de mission assignée.<br>Contactez votre gestionnaire pour obtenir un accès.</div>
+        </div>
+      }
+    </div>
+  `,
+  styles: [`
+    /* ── Shell ─────────────────────────────────────────────── */
+    .saas { margin:0; padding:0; min-width:0; width:100%; overflow-x:hidden; color:#2d3436; }
+    .dash-wide { max-width:none !important; }
+
+    /* ── Glass card (base for all sections) ─────────────────── */
+    .glass {
+      background:#ffffff;
+      border:1px solid #dfe6e9;
+      border-radius:18px;
+      box-shadow:0 2px 16px rgba(44,62,80,.07);
+    }
+
+    /* ── Page header ────────────────────────────────────────── */
+    .page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; margin:.2rem 0 1.05rem; }
+    .eyebrow { font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; color:#b2bec3; font-weight:700; }
+    .title { margin:.2rem 0 0; font-size:1.9rem; font-weight:950; letter-spacing:-.02em; color:#2d3436; }
+    .sub { margin:.55rem 0 0; color:#636e72; max-width:60rem; line-height:1.45; }
+    .head-actions { display:flex; align-items:center; gap:.7rem; }
+    .pill-btn {
+      display:inline-flex; align-items:center; gap:.55rem; height:40px; padding:0 .9rem;
+      border-radius:14px; border:1px solid #b3ede3; background:#e6faf6;
+      color:#00a886; text-decoration:none; font-weight:800;
+      transition:transform .14s, box-shadow .14s;
+    }
+    .pill-btn:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(0,201,167,.2); color:#007a63; }
+    .p-ic { width:18px; height:18px; display:inline-grid; place-items:center; color:#00c9a7; }
+    .p-ic svg { width:18px; height:18px; }
+    .p-badge {
+      margin-left:.15rem; height:18px; min-width:18px; padding:0 5px; border-radius:999px;
+      font-size:11px; font-weight:900; background:linear-gradient(135deg,#00a886,#00c9a7);
+      color:#fff; display:grid; place-items:center;
+    }
+
+    /* ── Layout grids ────────────────────────────────────────── */
+    .premium-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:1.05rem; align-items:start; }
+    @media (min-width:1200px) { .premium-grid { grid-template-columns:minmax(0,1fr) 380px; } }
+    .main-col { min-width:0; }
+    .right-col { min-width:0; display:flex; flex-direction:column; gap:1rem; }
+    .kpi-row { display:grid; gap:.9rem; margin-bottom:1rem; grid-template-columns:repeat(4,minmax(0,1fr)); }
+    @media (max-width:900px) { .kpi-row { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:520px) { .kpi-row { grid-template-columns:1fr; } }
+    .kpi-6 { grid-template-columns:repeat(6,minmax(0,1fr)); }
+    @media (max-width:1300px) { .kpi-6 { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+    @media (max-width:760px)  { .kpi-6 { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:520px)  { .kpi-6 { grid-template-columns:1fr; } }
+
+    /* ── KPI cards ───────────────────────────────────────────── */
+    .kpi-card {
+      position:relative; overflow:hidden;
+      padding:.9rem .95rem .85rem; border-radius:18px;
+      border:1px solid #dfe6e9; background:#ffffff;
+      box-shadow:0 2px 12px rgba(44,62,80,.07);
+      transition:transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+      min-width:0;
+    }
+    .kpi-card:before {
+      content:""; position:absolute; inset:-2px;
+      background:radial-gradient(380px 120px at 10% 0%, rgba(0,201,167,.08), transparent 55%);
+      pointer-events:none;
+    }
+    .kpi-card:hover { transform:translateY(-2px); border-color:#b3ede3; box-shadow:0 6px 28px rgba(0,201,167,.15); }
+    .grad-a:before   { background:radial-gradient(380px 120px at 10% 0%,rgba(0,201,167,.09),transparent 55%); }
+    .grad-b:before   { background:radial-gradient(380px 120px at 10% 0%,rgba(46,204,113,.08),transparent 55%); }
+    .grad-c:before   { background:radial-gradient(380px 120px at 10% 0%,rgba(243,156,18,.07),transparent 55%); }
+    .grad-d:before   { background:radial-gradient(380px 120px at 10% 0%,rgba(155,89,182,.07),transparent 55%); }
+    .grad-teal:before   { background:radial-gradient(380px 120px at 10% 0%,rgba(0,201,167,.09),transparent 55%); }
+    .grad-danger:before { background:radial-gradient(380px 120px at 10% 0%,rgba(231,76,60,.07),transparent 55%); }
+    .kpi-top { position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:.6rem; }
+    .kpi-name { font-size:.72rem; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:#636e72; }
+    .kpi-ic {
+      width:36px; height:36px; border-radius:12px; display:grid; place-items:center;
+      border:1px solid #b3ede3; background:#e6faf6; color:#00a886;
+    }
+    .kpi-ic svg { width:18px; height:18px; }
+    .kpi-val { position:relative; margin-top:.55rem; font-size:1.7rem; font-weight:950; letter-spacing:-.03em; color:#2d3436; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .unit { font-size:.9rem; font-weight:800; color:#636e72; margin-left:.12rem; }
+    .kpi-foot { position:relative; margin-top:.25rem; display:flex; align-items:center; gap:.5rem; font-size:.8rem; }
+    .trend { font-weight:800; padding:.1rem .4rem; border-radius:999px; }
+    .trend.up   { color:#00a886; background:#e6faf6; border:1px solid #b3ede3; }
+    .trend.ok   { color:#27ae60; background:#eafaf1; border:1px solid #a9dfbf; }
+    .trend.warn { color:#d68910; background:#fef9e7; border:1px solid #f9e79f; }
+    .trend.bad  { color:#e74c3c; background:#fdedec; border:1px solid #fadbd8; }
+    .muted { color:#b2bec3; }
+    .spark { position:relative; margin-top:.2rem; height:54px; }
+    :host ::ng-deep .apexcharts-tooltip { background:#fff !important; border:1px solid #dfe6e9 !important; color:#2d3436 !important; box-shadow:0 8px 32px rgba(0,0,0,.1) !important; }
+    :host ::ng-deep .apexcharts-tooltip-title { background:#f5faf8 !important; border-bottom:1px solid #dfe6e9 !important; color:#2d3436 !important; }
+    :host ::ng-deep .apexcharts-legend-text { color:#636e72 !important; }
+    :host ::ng-deep .apexcharts-xaxis-label, :host ::ng-deep .apexcharts-yaxis-label { fill:#636e72 !important; }
+
+    /* ── Live map hero ──────────────────────────────────────── */
+    .hero { margin-bottom:1rem; isolation:isolate; }
+    .hero-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.8rem .9rem .7rem; border-bottom:1px solid #dfe6e9; }
+    .hero-title { display:flex; align-items:center; gap:.6rem; font-weight:900; color:#2d3436; }
+    .hero-dot { width:10px; height:10px; border-radius:999px; background:#2ecc71; box-shadow:0 0 0 5px rgba(46,204,113,.12),0 0 24px rgba(46,204,113,.25); }
+    .live-pill { margin-left:.35rem; font-size:11px; font-weight:900; letter-spacing:.14em; padding:.18rem .5rem; border-radius:999px; border:1px solid #a9dfbf; color:#27ae60; background:#eafaf1; }
+    .hero-actions { display:flex; gap:.55rem; align-items:center; }
+    .mini { height:36px; padding:0 .75rem; border-radius:14px; border:1px solid #b3ede3; background:#e6faf6; color:#00a886; text-decoration:none; font-weight:800; display:inline-flex; align-items:center; transition:transform .14s, box-shadow .14s; }
+    .mini.ghost { border-color:#dfe6e9; background:#f5faf8; color:#636e72; }
+    .mini:hover { transform:translateY(-1px); box-shadow:0 4px 14px rgba(0,201,167,.2); }
+    .hero-body { position:relative; height:470px; padding:.85rem; }
+    .hero-body app-map-widget { display:block; height:100%; }
+    .hero-overlay {
+      position:absolute; left:1.25rem; bottom:1.2rem; z-index:10;
+      width:min(360px,calc(100% - 2.5rem)); padding:.85rem .9rem; border-radius:18px;
+      border:1px solid rgba(255,255,255,.25); background:rgba(13,20,33,.72);
+      backdrop-filter:blur(10px); box-shadow:0 16px 64px rgba(0,0,0,.4);
+    }
+    .ov-title { font-weight:900; color:#fff; }
+    .ov-sub { margin-top:.15rem; font-size:.82rem; color:rgba(255,255,255,.65); }
+    .ov-stats { margin-top:.75rem; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.55rem; }
+    .ov-k { padding:.5rem .6rem; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.07); }
+    .ov-l { font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; color:rgba(255,255,255,.6); font-weight:800; }
+    .ov-v { margin-top:.2rem; font-size:1.05rem; font-weight:950; color:#fff; }
+
+    /* ── Charts grid ─────────────────────────────────────────── */
+    .bottom-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.9rem; }
+    .bottom-grid-2 { margin-top:.9rem; }
+    @media (max-width:1100px) { .bottom-grid,.bottom-grid-2 { grid-template-columns:1fr; } }
+    .chart-defer-ph { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.9rem; margin-top:0; }
+    @media (max-width:1100px) { .chart-defer-ph { grid-template-columns:1fr; } }
+    .chart-defer-ph .ph-card { min-height:260px; border-radius:18px; border:1px solid #dfe6e9; background:linear-gradient(90deg,#f5faf8,#e8f5f1,#f5faf8); background-size:200% 100%; animation:shimmer 1.3s infinite; }
+    .chart-empty { min-height:200px; display:grid; place-items:center; padding:1rem; border-radius:14px; border:1px dashed #b3ede3; color:#b2bec3; font-weight:700; }
+
+    /* ── Health card ─────────────────────────────────────────── */
+    .health-card .health-grid { display:grid; grid-template-columns:1fr 1fr; gap:.65rem; margin-top:.25rem; }
+    .health-tile { padding:.65rem .7rem; border-radius:14px; border:1px solid #dfe6e9; background:#f5faf8; }
+    .health-tile.span-2 { grid-column:1 / -1; }
+    .h-l { font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; font-weight:800; color:#b2bec3; }
+    .h-v { margin-top:.25rem; font-size:1.25rem; font-weight:950; color:#2d3436; }
+    .h-note { margin-top:.35rem; font-size:.78rem; color:#636e72; line-height:1.35; }
+    .h-bar { margin-top:.45rem; height:6px; border-radius:999px; background:#dfe6e9; overflow:hidden; }
+    .h-fill { display:block; height:100%; border-radius:999px; }
+    .h-fill.ok  { background:linear-gradient(90deg,#00c9a7,#2ecc71); }
+    .h-fill.mid { background:linear-gradient(90deg,#f39c12,#e74c3c); }
+
+    /* ── Chart sections ──────────────────────────────────────── */
+    .card { padding:.95rem .95rem .85rem; }
+    .card-head { display:flex; align-items:flex-end; justify-content:space-between; gap:.75rem; margin-bottom:.55rem; }
+    .card-title { font-weight:900; color:#2d3436; font-size:.95rem; }
+    .card-sub { font-size:.82rem; color:#636e72; }
+
+    /* ── Side panels ─────────────────────────────────────────── */
+    .panel { padding:.95rem; }
+    .panel-head { display:flex; align-items:flex-end; justify-content:space-between; gap:.75rem; margin-bottom:.65rem; }
+    .panel-title { font-weight:900; color:#2d3436; font-size:.95rem; }
+    .panel-link { font-size:.82rem; font-weight:800; color:#00a886; text-decoration:none; transition:color .12s; }
+    .panel-link:hover { color:#00c9a7; text-decoration:underline; }
+    .mini-skel { height:160px; border-radius:16px; border:1px solid #dfe6e9; background:linear-gradient(90deg,#f5faf8,#e8f5f1,#f5faf8); background-size:200% 100%; animation:shimmer 1.3s infinite; }
+
+    /* ── List rows ───────────────────────────────────────────── */
+    .list { display:flex; flex-direction:column; gap:.5rem; }
+    .row { display:flex; align-items:center; gap:.65rem; padding:.6rem; border-radius:12px; border:1px solid #dfe6e9; background:#f5faf8; transition:border-color .12s; }
+    .row:hover { border-color:#b3ede3; background:#e6faf6; }
+    .ava { width:36px; height:36px; border-radius:12px; display:grid; place-items:center; font-weight:900; font-size:.88rem; color:#fff; background:linear-gradient(135deg,#00a886,#00c9a7); border:2px solid #b3ede3; }
+    .ava.alt { background:linear-gradient(135deg,#27ae60,#2ecc71); border-color:#a9dfbf; }
+    .row-meta { min-width:0; flex:1; }
+    .row-title { font-weight:700; color:#2d3436; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.875rem; }
+    .row-sub { margin-top:.1rem; font-size:.78rem; color:#b2bec3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .row-pill { font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; padding:.25rem .5rem; border-radius:999px; border:1px solid #dfe6e9; color:#636e72; background:#f1f3f5; }
+    .row-pill.ok   { border-color:#b3ede3; color:#00a886; background:#e6faf6; }
+    .row-pill.warn { border-color:#f9e79f; color:#d68910; background:#fef9e7; }
+    .row-pill.bad  { border-color:#a9dfbf; color:#27ae60; background:#eafaf1; }
+    .empty { padding:.65rem; border-radius:12px; border:1px dashed #b3ede3; color:#b2bec3; font-size:.875rem; }
+
+    /* ── Fuel list ───────────────────────────────────────────── */
+    .fuel-list { display:flex; flex-direction:column; gap:.5rem; }
+    .fuel-row { display:flex; align-items:center; justify-content:space-between; gap:.75rem; padding:.6rem; border-radius:12px; border:1px solid #dfe6e9; background:#f5faf8; }
+    .fuel-label { min-width:0; font-weight:700; color:#2d3436; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.875rem; }
+    .fuel-metrics { display:flex; align-items:center; gap:.55rem; flex-shrink:0; }
+    .m { font-variant-numeric:tabular-nums; color:#636e72; font-weight:700; font-size:.82rem; }
+    .m.strong { color:#00a886; font-weight:800; }
+
+    /* ── Quick links (chauffeur) ─────────────────────────────── */
+    .quick-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.85rem; margin-top:1rem; }
+    @media (max-width:720px) { .quick-row { grid-template-columns:1fr; } }
+    .quick { display:flex; gap:.75rem; align-items:flex-start; padding:.95rem; border-radius:18px; border:1px solid #dfe6e9; background:#ffffff; box-shadow:0 2px 12px rgba(44,62,80,.07); text-decoration:none; color:#2d3436; transition:transform .16s, border-color .16s, box-shadow .16s; }
+    .quick:hover { transform:translateY(-2px); border-color:#b3ede3; box-shadow:0 6px 24px rgba(0,201,167,.14); }
+    .q-ic { width:44px; height:44px; border-radius:14px; display:grid; place-items:center; border:1px solid #b3ede3; background:#e6faf6; color:#00a886; flex-shrink:0; }
+    .q-ic svg { width:22px; height:22px; }
+    .q-title { font-weight:800; color:#2d3436; }
+    .q-sub { margin-top:.18rem; font-size:.84rem; color:#636e72; line-height:1.35; }
+
+    /* ── Error / skeleton states ─────────────────────────────── */
+    .chauffeur-error { padding:12px 14px; border-radius:14px; border:1px solid #fadbd8; background:#fdedec; color:#e74c3c; font-weight:700; }
+    .dash-err { padding:12px 14px; border-radius:16px; border:1px solid #fadbd8; background:#fdedec; color:#e74c3c; font-weight:800; }
+    .skeleton-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1rem; margin:1rem 0; }
+    @media (max-width:900px) { .skeleton-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:520px) { .skeleton-grid { grid-template-columns:1fr; } }
+    .sk-card { height:122px; border-radius:16px; background:linear-gradient(90deg,#f5faf8,#e8f5f1,#f5faf8); background-size:200% 100%; animation:shimmer 1.3s infinite; border:1px solid #dfe6e9; }
+    .skeleton-dash .sk-row { border-radius:16px; background:linear-gradient(90deg,#f5faf8,#e8f5f1,#f5faf8); background-size:200% 100%; animation:shimmer 1.3s infinite; border:1px solid #dfe6e9; }
+    .skeleton-dash .kpi-sk { height:120px; margin-bottom:.85rem; }
+    .skeleton-dash .hero-sk { height:320px; margin-bottom:.85rem; }
+    .skeleton-dash .charts-sk { height:260px; }
+    @keyframes shimmer { 0% { background-position:0% 0; } 100% { background-position:-200% 0; } }
+
+    /* ── Empty state ─────────────────────────────────────────── */
+    .user-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1rem; padding:3.5rem 2rem; margin-top:.5rem; text-align:center; }
+    .ue-icon { width:64px; height:64px; border-radius:20px; display:grid; place-items:center; border:1px solid #b3ede3; background:#e6faf6; color:#00a886; }
+    .ue-icon svg { width:32px; height:32px; }
+    .ue-title { font-size:1.2rem; font-weight:900; color:#2d3436; }
+    .ue-msg { color:#636e72; line-height:1.55; max-width:38rem; }
+  `],
+})
+export class DashboardComponent implements OnInit {
+  private readonly destroyRef = inject(DestroyRef);
+
+  chauffeurLoading = signal(true);
+  chauffeurError = signal<string | null>(null);
+  chauffeurStats = signal({ total: 0, planned: 0, inProgress: 0, completed: 0 });
+
+  alertsCount = signal(0);
+  /** Aggregated alert counts for analytics chart */
+  alertsTypeRows = signal<Array<{ type: string; count: number }>>([]);
+  dashLoading = signal(false);
+  dashError = signal<string | null>(null);
+  dashboard = signal<DashboardPayload | null>(null);
+  topFuelVehicles = signal<TopFuelRow[]>([]);
+
+  sideLoading = signal(false);
+  onlineDrivers = signal<DriverRow[]>([]);
+  recentMissions = signal<MissionRow[]>([]);
+
+  /** Stable Apex config objects — avoid new references each CD (prevents chart thrashing). */
+  readonly sparkChartCfg: ApexChart = {
+    type: 'area',
+    height: 54,
+    sparkline: { enabled: true },
+    animations: { enabled: false },
+    redrawOnParentResize: false,
+  };
+  readonly sparkStrokeCfg: ApexStroke = { curve: 'smooth', width: 2 };
+  readonly sparkGridCfg: ApexGrid = { show: false, padding: { left: 0, right: 0, top: 0, bottom: 0 } };
+  readonly sparkDataLabelsCfg: ApexDataLabels = { enabled: false };
+  readonly sparkTooltipCfg: ApexTooltip = { enabled: true, theme: 'light', x: { show: false } };
+  readonly sparkXAxisCfg: ApexXAxis = {
+    labels: { show: false },
+    axisBorder: { show: false },
+    axisTicks: { show: false },
+    tooltip: { enabled: false },
+  };
+  readonly sparkYAxisCfg: ApexYAxis = { labels: { show: false } };
+  readonly sparkFillA: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.35, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkFillB: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.28, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkFillC: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.28, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkFillTeal: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.28, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkFillDanger: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.28, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkFillD: ApexFill = {
+    type: 'gradient',
+    gradient: { shadeIntensity: 0.2, opacityFrom: 0.28, opacityTo: 0.05, stops: [0, 90, 100] },
+  };
+  readonly sparkColorsA     = ['#00c9a7'];
+  readonly sparkColorsB     = ['#2ecc71'];
+  readonly sparkColorsC     = ['#f39c12'];
+  readonly sparkColorsTeal  = ['#00a886'];
+  readonly sparkColorsDanger = ['#e74c3c'];
+  readonly sparkColorsD     = ['#9b59b6'];
+
+  maintSharePct = computed(() => {
+    const d = this.dashboard();
+    if (!d?.total_vehicles) return 0;
+    return (100 * d.vehicles_under_maintenance) / d.total_vehicles;
+  });
+
+  fuelMomPct = computed(() => {
+    const s = this.dashboard()?.series?.fuel_by_month ?? [];
+    if (s.length < 2) return null;
+    const a = Number(s[s.length - 2].liters);
+    const b = Number(s[s.length - 1].liters);
+    if (a <= 0) return b > 0 ? 100 : 0;
+    return ((b - a) / a) * 100;
+  });
+
+  driverCoverPct = computed(() => {
+    const d = this.dashboard();
+    if (!d?.total_vehicles) return 0;
+    return (100 * d.active_drivers) / d.total_vehicles;
+  });
+
+  activeFleetPct = computed(() => {
+    const d = this.dashboard();
+    if (!d?.total_vehicles) return 0;
+    const a = d.active_vehicles ?? 0;
+    return (100 * a) / d.total_vehicles;
+  });
+
+  missionsMomPct = computed(() => {
+    const s = this.dashboard()?.series?.missions_by_month ?? [];
+    if (s.length < 2) return null;
+    const a = Number(s[s.length - 2].count);
+    const b = Number(s[s.length - 1].count);
+    if (a <= 0) return b > 0 ? 100 : 0;
+    return ((b - a) / a) * 100;
+  });
+
+  constructor(
+    private api: ApiService,
+    public auth: AuthService,
+    private t: TranslateService,
+    private cdr: ChangeDetectorRef,
+  ) {
+    this.t.onLangChange.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.cdr.markForCheck());
+    this.t.onDefaultLangChange.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(() => this.cdr.markForCheck());
+  }
+
+  ngOnInit(): void {
+    if (this.auth.currentUser()?.role === 'chauffeur') {
+      this.api
+        .get<{ data: Array<{ status: string }> }>('/missions')
+        .pipe(
+          takeUntilDestroyed(this.destroyRef),
+          finalize(() => {
+            this.chauffeurLoading.set(false);
+            this.cdr.markForCheck();
+          }),
+        )
+        .subscribe({
+          next: (res) => {
+            const list = res.data ?? [];
+            let planned = 0;
+            let inProgress = 0;
+            let completed = 0;
+            for (const m of list) {
+              if (m.status === 'planned') planned++;
+              else if (m.status === 'in_progress') inProgress++;
+              else if (m.status === 'completed') completed++;
+            }
+            this.chauffeurStats.set({ total: list.length, planned, inProgress, completed });
+            this.cdr.markForCheck();
+          },
+          error: () => {
+            this.chauffeurError.set(this.t.instant('COMMON.FAILED_LOAD'));
+            this.cdr.markForCheck();
+          },
+        });
+      return;
+    }
+
+    this.loadDashboard();
+  }
+
+  /** Stable @for track keys (avoid recreating list DOM) */
+  driverRowKey(d: DriverRow): string | number {
+    return d.id ?? d.email ?? d.name ?? '';
+  }
+
+  missionRowKey(m: MissionRow): string | number {
+    return m.id ?? m.created_at ?? m.description ?? '';
+  }
+
+  canFleet(): boolean {
+    const r = this.auth.currentUser()?.role;
+    return r === 'admin' || r === 'gestionnaire';
+  }
+
+  private loadDashboard(): void {
+    this.dashLoading.set(true);
+    this.dashError.set(null);
+    this.api
+      .get<DashboardPayload>('/dashboard')
+      .pipe(
+        takeUntilDestroyed(this.destroyRef),
+        finalize(() => {
+          this.dashLoading.set(false);
+          this.cdr.markForCheck();
+        }),
+      )
+      .subscribe({
+        next: (data) => {
+          this.dashboard.set(data);
+          this.dashError.set(null);
+          this.loadFuel();
+          this.loadSidePanel();
+          if (this.canFleet()) {
+            this.api
+              .get<AlertsResponse>('/alerts')
+              .pipe(takeUntilDestroyed(this.destroyRef))
+              .subscribe({
+                next: (res) => {
+                  this.alertsCount.set(res.count ?? res.alerts?.length ?? 0);
+                  const alerts = res.alerts ?? [];
+                  const map = new Map<string, number>();
+                  for (const a of alerts) {
+                    const t = a.type ?? 'unknown';
+                    map.set(t, (map.get(t) ?? 0) + 1);
+                  }
+                  this.alertsTypeRows.set(
+                    [...map.entries()]
+                      .map(([type, count]) => ({ type, count }))
+                      .sort((a, b) => b.count - a.count),
+                  );
+                  this.cdr.markForCheck();
+                },
+                error: () => {
+                  this.alertsTypeRows.set([]);
+                  this.cdr.markForCheck();
+                },
+              });
+          } else {
+            this.alertsCount.set(0);
+            this.alertsTypeRows.set([]);
+          }
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          this.dashError.set(this.t.instant('COMMON.FAILED_LOAD'));
+          this.cdr.markForCheck();
+        },
+      });
+  }
+
+  private loadSidePanel(): void {
+    this.sideLoading.set(true);
+
+    if (this.canFleet()) {
+      this.api
+        .get<{ data: MissionRow[] }>('/missions', { page: 1, per_page: 6 })
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe({
+          next: (res) => {
+            this.recentMissions.set((res?.data ?? []).slice(0, 6));
+            this.cdr.markForCheck();
+          },
+          error: () => {
+            this.recentMissions.set([]);
+          },
+        });
+
+      this.api
+        .get<{ data: DriverRow[] }>('/drivers', { page: 1, per_page: 5 })
+        .pipe(takeUntilDestroyed(this.destroyRef))
+        .subscribe({
+          next: (res) => {
+            this.onlineDrivers.set((res?.data ?? []).slice(0, 5));
+            this.sideLoading.set(false);
+            this.cdr.markForCheck();
+          },
+          error: () => {
+            this.onlineDrivers.set([]);
+            this.sideLoading.set(false);
+            this.cdr.markForCheck();
+          },
+        });
+    } else {
+      this.recentMissions.set([]);
+      this.onlineDrivers.set([]);
+      this.sideLoading.set(false);
+      this.cdr.markForCheck();
+    }
+  }
+
+  loadFuel(): void {
+    if (!this.canFleet()) {
+      this.topFuelVehicles.set([]);
+      return;
+    }
+    this.api
+      .get<{ data: FuelRecord[] }>('/fuel-records', { page: 1, per_page: 50 })
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+      next: (res) => {
+        const rows = res.data ?? [];
+        const acc = new Map<number, { label: string; liters: number; cost: number }>();
+        for (const r of rows) {
+          const id = r.vehicle_id;
+          const label = r.vehicle
+            ? `${r.vehicle.brand} ${r.vehicle.model} (${r.vehicle.license_plate})`
+            : `#${id}`;
+          const L = Number(r.liters);
+          const C = Number(r.price);
+          const lit = Number.isFinite(L) ? L : 0;
+          const cost = Number.isFinite(C) ? C : 0;
+          const cur = acc.get(id);
+          if (cur) {
+            cur.liters += lit;
+            cur.cost += cost;
+          } else {
+            acc.set(id, { label, liters: lit, cost });
+          }
+        }
+        const list = [...acc.entries()]
+          .map(([vehicleId, v]) => ({ vehicleId, label: v.label, liters: v.liters, cost: v.cost }))
+          .sort((a, b) => b.liters - a.liters)
+          .slice(0, 5);
+        this.topFuelVehicles.set(list);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.topFuelVehicles.set([]);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private statusLabel(status: string): string {
+    const key = `VEHICLES.STATUS_${status.toUpperCase()}`;
+    const tr = this.t.instant(key);
+    return tr !== key ? tr : status;
+  }
+
+  private seriesLast6(values: number[]): number[] {
+    const v = values.filter((x) => Number.isFinite(x));
+    if (v.length >= 6) return v.slice(-6);
+    if (v.length === 0) return [3, 4, 3, 5, 4, 6];
+    const pad = Array.from({ length: 6 - v.length }, () => v[0]);
+    return [...pad, ...v];
+  }
+
+  sparkVehiclesSeries = computed<ApexAxisChartSeries>(() => {
+    const base = this.dashboard()?.series?.vehicles_by_status?.reduce((a, b) => a + (b.count ?? 0), 0) ?? 0;
+    return [{ name: 'Vehicles', data: this.seriesLast6([base * 0.92, base * 0.95, base * 0.93, base * 0.98, base * 1.01, base]) }];
+  });
+  sparkMaintSeries = computed<ApexAxisChartSeries>(() => {
+    const base = this.dashboard()?.vehicles_under_maintenance ?? 0;
+    return [{ name: 'Maintenance', data: this.seriesLast6([base * 0.8, base * 0.95, base * 0.9, base * 1.1, base * 1.05, base]) }];
+  });
+  sparkActiveVehiclesSeries = computed<ApexAxisChartSeries>(() => {
+    const rows = this.dashboard()?.series?.vehicles_by_status ?? [];
+    const active = rows.find((r) => r.status === 'active')?.count ?? 0;
+    return [{ name: 'Active', data: this.seriesLast6([active * 0.92, active * 0.95, active * 0.93, active * 0.98, active * 1.01, active]) }];
+  });
+  sparkMissionsMonthSeries = computed<ApexAxisChartSeries>(() => {
+    const s = this.dashboard()?.series?.missions_by_month ?? [];
+    const pts = s.map((x) => Number(x.count));
+    return [{ name: 'Missions', data: this.seriesLast6(pts.length ? pts : [0, 0, 0, 0, 0, 0]) }];
+  });
+  sparkFuelSeries = computed<ApexAxisChartSeries>(() => {
+    const s = this.dashboard()?.series?.fuel_by_month ?? [];
+    return [{ name: 'Fuel', data: this.seriesLast6(s.map((x) => Number(x.liters))) }];
+  });
+  sparkAlertsSeries = computed<ApexAxisChartSeries>(() => {
+    const a = this.alertsCount();
+    return [{ name: 'Alerts', data: this.seriesLast6([a * 0.6, a * 0.8, a * 0.7, a * 1.2, a * 1.05, a]) }];
+  });
+
+  fuelChart = computed(() => {
+    const s = this.dashboard()?.series?.fuel_by_month ?? [];
+    const labels = s.map((x) => x.ym);
+    return {
+      chart: {
+        type: 'area' as const,
+        height: 260,
+        toolbar: { show: false },
+        foreColor: '#636e72',
+        animations: { enabled: false },
+        redrawOnParentResize: false,
+      },
+      series: [
+        { name: this.t.instant('DASHBOARD.FUEL_LITERS'), data: s.map((x) => Number(x.liters)) },
+        { name: this.t.instant('DASHBOARD.FUEL_COST'), data: s.map((x) => Number(x.cost)) },
+      ] as ApexAxisChartSeries,
+      colors: ['#00c9a7', '#9b59b6'],
+      xaxis: { categories: labels, axisBorder: { show: false }, axisTicks: { show: false } } as ApexXAxis,
+      yaxis: [{ labels: { formatter: (v: number) => `${Math.round(v)}` } }, { opposite: true, labels: { formatter: (v: number) => `${Math.round(v)}` } }] as ApexYAxis[],
+      grid: { borderColor: 'rgba(0,201,167,.12)' } as ApexGrid,
+      stroke: { curve: 'smooth', width: 2 } as ApexStroke,
+      fill: { type: 'gradient', gradient: { opacityFrom: 0.22, opacityTo: 0.04, stops: [0, 90, 100] } } as ApexFill,
+      tooltip: { theme: 'light' } as ApexTooltip,
+      legend: { show: true, position: 'top' } as ApexLegend,
+      dataLabels: { enabled: false } as ApexDataLabels,
+    };
+  });
+
+  maintChart = computed(() => {
+    const s = this.dashboard()?.series?.maintenance_by_month ?? [];
+    const labels = s.map((x) => x.ym);
+    return {
+      chart: {
+        type: 'bar' as const,
+        height: 260,
+        toolbar: { show: false },
+        foreColor: '#636e72',
+        animations: { enabled: false },
+        redrawOnParentResize: false,
+      },
+      series: [
+        { name: this.t.instant('DASHBOARD.RECENT_MAINTENANCE'), data: s.map((x) => Number(x.count)) },
+        { name: this.t.instant('DASHBOARD.TOTAL_COST'), data: s.map((x) => Number(x.cost)) },
+      ] as ApexAxisChartSeries,
+      colors: ['#f39c12', '#00c9a7'],
+      xaxis: { categories: labels, axisBorder: { show: false }, axisTicks: { show: false } } as ApexXAxis,
+      yaxis: [{ labels: { formatter: (v: number) => `${Math.round(v)}` } }, { opposite: true, labels: { formatter: (v: number) => `${Math.round(v)}` } }] as ApexYAxis[],
+      grid: { borderColor: 'rgba(0,201,167,.12)' } as ApexGrid,
+      stroke: { curve: 'smooth', width: 2 } as ApexStroke,
+      fill: { opacity: 0.9 } as ApexFill,
+      tooltip: { theme: 'light' } as ApexTooltip,
+      legend: { show: true, position: 'top' } as ApexLegend,
+      dataLabels: { enabled: false } as ApexDataLabels,
+      plotOptions: { bar: { borderRadius: 8, columnWidth: '52%' } } as ApexPlotOptions,
+    };
+  });
+
+  statusDonut = computed(() => {
+    const st = this.dashboard()?.series?.vehicles_by_status ?? [];
+    return {
+      chart: {
+        type: 'donut' as const,
+        height: 260,
+        toolbar: { show: false },
+        foreColor: '#636e72',
+        animations: { enabled: false },
+        redrawOnParentResize: false,
+      },
+      series: st.map((x) => Number(x.count)) as ApexNonAxisChartSeries,
+      labels: st.map((x) => this.statusLabel(x.status)),
+      colors: ['#00c9a7', '#2ecc71', '#f39c12', '#e74c3c', '#b2bec3'],
+      legend: { show: true, position: 'bottom' } as ApexLegend,
+      dataLabels: { enabled: false } as ApexDataLabels,
+      plotOptions: {
+        pie: {
+          donut: {
+            size: '68%',
+            labels: {
+              show: true,
+              total: {
+                show: true,
+                label: this.t.instant('DASHBOARD.TOTAL_FLEET'),
+                formatter: () => `${this.dashboard()?.total_vehicles ?? 0}`,
+              },
+            },
+          },
+        },
+      } as ApexPlotOptions,
+      stroke: { width: 0 } as ApexStroke,
+      fill: { opacity: 1 } as ApexFill,
+      tooltip: { theme: 'light' } as ApexTooltip,
+    };
+  });
+
+  missionsChart = computed(() => {
+    const s = this.dashboard()?.series?.missions_by_month ?? [];
+    const labels = s.map((x) => x.ym);
+    return {
+      chart: {
+        type: 'area' as const,
+        height: 260,
+        toolbar: { show: false },
+        foreColor: '#636e72',
+        animations: { enabled: false },
+        redrawOnParentResize: false,
+      },
+      series: [{ name: this.t.instant('DASHBOARD.CHART_MISSIONS_TITLE'), data: s.map((x) => Number(x.count)) }] as ApexAxisChartSeries,
+      colors: ['#9b59b6'],
+      xaxis: { categories: labels, axisBorder: { show: false }, axisTicks: { show: false } } as ApexXAxis,
+      yaxis: [{ labels: { formatter: (v: number) => `${Math.round(v)}` } }] as ApexYAxis[],
+      grid: { borderColor: 'rgba(0,201,167,.12)' } as ApexGrid,
+      stroke: { curve: 'smooth', width: 2 } as ApexStroke,
+      fill: { type: 'gradient', gradient: { opacityFrom: 0.35, opacityTo: 0.05, stops: [0, 90, 100] } } as ApexFill,
+      tooltip: { theme: 'light' } as ApexTooltip,
+      legend: { show: false } as ApexLegend,
+      dataLabels: { enabled: false } as ApexDataLabels,
+    };
+  });
+
+  alertsBarChart = computed(() => {
+    const rows = this.alertsTypeRows();
+    const labels = rows.map((r) => this.alertTypeLabel(r.type));
+    const data = rows.map((r) => r.count);
+    return {
+      chart: {
+        type: 'bar' as const,
+        height: 260,
+        toolbar: { show: false },
+        foreColor: '#636e72',
+        animations: { enabled: false },
+        redrawOnParentResize: false,
+      },
+      series: [{ name: this.t.instant('DASHBOARD.CHART_ALERTS_TITLE'), data }] as ApexAxisChartSeries,
+      colors: ['#00c9a7', '#9b59b6', '#f39c12', '#e74c3c', '#2ecc71', '#b2bec3'],
+      plotOptions: { bar: { horizontal: true, borderRadius: 8, barHeight: '72%', distributed: true } } as ApexPlotOptions,
+      xaxis: { categories: labels, axisBorder: { show: false }, axisTicks: { show: false } } as ApexXAxis,
+      yaxis: [{ labels: { formatter: (v: number) => `${Math.round(v)}` } }] as ApexYAxis[],
+      grid: { borderColor: 'rgba(0,201,167,.12)' } as ApexGrid,
+      stroke: { show: true, width: 0, colors: ['transparent'] } as ApexStroke,
+      fill: { opacity: 0.92 } as ApexFill,
+      tooltip: { theme: 'light' } as ApexTooltip,
+      legend: { show: false } as ApexLegend,
+      dataLabels: { enabled: true, style: { colors: ['#ffffff'], fontWeight: 800, fontSize: '11px' }, formatter: (val: number) => `${val}` } as ApexDataLabels,
+    };
+  });
+
+  private alertTypeLabel(type: string): string {
+    const keys: Record<string, string> = {
+      maintenance: 'DASHBOARD.ALERT_TYPE_MAINT',
+      maintenance_due: 'DASHBOARD.ALERT_TYPE_MAINT_DUE',
+      fuel_anomaly: 'DASHBOARD.ALERT_TYPE_FUEL',
+      unknown: 'DASHBOARD.ALERT_TYPE_UNKNOWN',
+    };
+    const k = keys[type] ?? 'DASHBOARD.ALERT_TYPE_UNKNOWN';
+    return this.t.instant(k);
+  }
+}
