@@ -1,6 +1,6 @@
 export const environment = {
-  production: false,
-  apiUrl: 'http://127.0.0.1:8000/api',
+  production: true,
+  apiUrl: 'https://smart-fleet-backend-39pu.onrender.com/api',
   pusher: {
     key: '',
     cluster: 'eu',
