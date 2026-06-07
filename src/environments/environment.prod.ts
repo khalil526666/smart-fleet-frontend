@@ -1,4 +1,4 @@
 export const environment = {
   production: true,
-  apiUrl: '/api',
+  apiUrl: 'https://smart-fleet-backend-39pu.onrender.com/api',
 };
